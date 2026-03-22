@@ -1,0 +1,102 @@
+Backend changes for rng_hybrid_app.py / rng_hybrid_webpanel.py
+
+1) Add a shared auth token to TimerSettings in rng_hybrid_models.py:
+
+    api_token: str = "change-me-long-random-token"
+    allowed_origin: str = "https://your-project.vercel.app"
+
+2) In CombinedHybridRNGApp.__init__ add:
+
+    self.api_token_var = tk.StringVar(value=self.settings.api_token)
+    self.allowed_origin_var = tk.StringVar(value=self.settings.allowed_origin)
+
+3) In _read_settings_from_ui add:
+
+    s.api_token = self.api_token_var.get().strip()
+    s.allowed_origin = self.allowed_origin_var.get().strip()
+
+4) In _build_web add two new fields:
+
+    ("API token", self.api_token_var)
+    ("Allowed origin", self.allowed_origin_var)
+
+5) Replace get_web_state with a version that also returns keep_alive_running and URLs for frontend use.
+
+6) Add these methods to CombinedHybridRNGApp:
+
+    def start_macro_replay_from_web(self):
+        try:
+            if self.macro_running:
+                return False, "Macro already running"
+            self.root.after(0, self.start_macro_replay)
+            return True, "Macro replay requested"
+        except Exception as exc:
+            return False, str(exc)
+
+    def start_keep_alive_from_web(self):
+        try:
+            self.root.after(0, self.start_keep_switch_alive)
+            return True, "Keep alive start requested"
+        except Exception as exc:
+            return False, str(exc)
+
+    def stop_keep_alive_from_web(self):
+        try:
+            self.root.after(0, self.stop_keep_switch_alive)
+            return True, "Keep alive stop requested"
+        except Exception as exc:
+            return False, str(exc)
+
+    def reset_counter_from_web(self):
+        try:
+            self.root.after(0, self.reset_counter_to_zero)
+            return True, "Reset counter requested"
+        except Exception as exc:
+            return False, str(exc)
+
+7) In rng_hybrid_webpanel.py, replace the old routes with authenticated API routes:
+
+    GET  /api/status
+    POST /api/button
+    POST /api/timer/start
+    POST /api/timer/stop
+    POST /api/macro/start
+    POST /api/macro/replay
+    POST /api/macro/stop
+    POST /api/keep-alive/start
+    POST /api/keep-alive/stop
+    POST /api/reset-counter/reset
+    GET  /video
+
+8) Add auth helper in WebControlServer:
+
+    def _is_authorized(self, req):
+        expected = (self.owner_app.settings.api_token or "").strip()
+        if not expected:
+            return True
+        auth = req.headers.get("Authorization", "")
+        if auth.startswith("Bearer ") and auth[7:].strip() == expected:
+            return True
+        if req.args.get("token", "").strip() == expected:
+            return True
+        return False
+
+9) Add CORS helper:
+
+    def _corsify(self, response):
+        origin = (self.owner_app.settings.allowed_origin or "").strip()
+        if origin:
+            response.headers["Access-Control-Allow-Origin"] = origin
+            response.headers["Vary"] = "Origin"
+            response.headers["Access-Control-Allow-Headers"] = "Authorization, Content-Type"
+            response.headers["Access-Control-Allow-Methods"] = "GET, POST, OPTIONS"
+        return response
+
+10) In every API route:
+    - reject unauthorized requests with 401
+    - wrap JSON responses with _corsify(...)
+    - support OPTIONS for preflight
+
+11) Do not remove the local stream page until the new frontend is fully tested. You can keep `/` for local LAN use and add `/api/*` for Vercel.
+
+12) For tunnel launch on Raspberry Pi, point cloudflared at the backend port, for example localhost:5000.
